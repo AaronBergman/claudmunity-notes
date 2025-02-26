@@ -1,70 +1,64 @@
 import streamlit as st
 import pandas as pd
 import random
-import os
 import anthropic
 import requests
 from io import StringIO
 
-# Set page config for a nicer appearance
+# Set page configuration
 st.set_page_config(
     page_title="Community Notes Assistant",
-    page_icon="📝",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_icon="🗒️",
+    layout="wide"
 )
-
-# Add CSS for styling
-st.markdown("""
-<style>
-    .main {
-        padding: 1rem;
-    }
-    .chat-message {
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin-bottom: 1rem;
-        display: flex;
-    }
-    .chat-message.user {
-        background-color: #f0f2f6;
-    }
-    .chat-message.assistant {
-        background-color: #e3f6f5;
-    }
-    .chat-message .avatar {
-        width: 40px;
-        height: 40px;
-        border-radius: 50%;
-        object-fit: cover;
-        margin-right: 1rem;
-    }
-    .chat-message .message {
-        width: 100%;
-    }
-    .sidebar .sidebar-content {
-        padding: 1rem;
-    }
-    .stTextInput>div>div>input {
-        padding: 0.75rem;
-    }
-    hr {
-        margin: 1.5rem 0;
-    }
-</style>
-""", unsafe_allow_html=True)
 
 # Function to call Claude API
 def call_claude_api(client, user_message, conversation_history=""):
-    """Call the Anthropic Claude API and return the assistant's response."""
+    """Call the Anthropic Claude API using the Python client and return the assistant's response."""
     try:
-        # Just use the current message without conversation history
-        # Note: The original script defines this parameter but doesn't use it
-        messages = [{"role": "user", "content": user_message}]
+        # Create messages list for the API
+        messages = []
         
-        # Debug info
-        st.session_state.debug_info = f"Sending message to API without conversation history"
+        # Add conversation history if provided
+        if conversation_history:
+            # Parse conversation history into proper message format
+            history_lines = conversation_history.strip().split('\n')
+            current_role = None
+            current_content = []
+            
+            for line in history_lines:
+                if line.startswith("User: "):
+                    # If we were building a previous message, add it
+                    if current_role and current_content:
+                        messages.append({"role": current_role, "content": "\n".join(current_content)})
+                        current_content = []
+                    
+                    current_role = "user"
+                    current_content = [line[6:]]  # Remove "User: " prefix
+                elif line.startswith("Assistant: "):
+                    # If we were building a previous message, add it
+                    if current_role and current_content:
+                        messages.append({"role": current_role, "content": "\n".join(current_content)})
+                        current_content = []
+                    
+                    current_role = "assistant"
+                    current_content = [line[11:]]  # Remove "Assistant: " prefix
+                elif line.startswith('-' * 80):
+                    # Separator line, ignore
+                    continue
+                else:
+                    # Continuation of current message
+                    if current_role:
+                        current_content.append(line)
+            
+            # Add the last message if there is one
+            if current_role and current_content:
+                messages.append({"role": current_role, "content": "\n".join(current_content)})
         
+        # Add the current user message
+        messages.append({"role": "user", "content": user_message})
+        
+        # Use the Python client to create a message
         response = client.messages.create(
             model="claude-3-7-sonnet-latest",
             max_tokens=1024,
@@ -86,256 +80,159 @@ If you're unsure about the accuracy of information, err on the side of caution."
             messages=messages
         )
         
+        # Extract the text content from the response
         if response.content and len(response.content) > 0:
             return response.content[0].text
         else:
             return "No response content received."
     except Exception as e:
-        return f"API request failed: {str(e)}"
+        raise Exception(f"API request failed: {str(e)}")
 
-# Create a function to load data
-@st.cache_data(ttl=3600)  # Cache the data for 1 hour
-def load_data(url):
-    try:
-        with st.spinner("Downloading and processing data..."):
-            response = requests.get(url)
-            response.raise_for_status()
-            
-            csv_data = StringIO(response.text)
-            df = pd.read_csv(csv_data, sep=None, engine='python')
-            
-            # Check and rename columns if needed
-            if 'tweet_content' not in df.columns or 'summary' not in df.columns:
-                if len(df.columns) >= 2:
-                    df.columns = ['tweet_content', 'summary']
-                else:
-                    st.error(f"Expected 'tweet_content' and 'summary' columns but found: {df.columns.tolist()}")
-                    return None
-            
-            # Filter out rows with empty content
-            valid_df = df[
-                (df['tweet_content'].notna()) & 
-                (df['tweet_content'].str.strip() != '') &
-                (df['summary'].notna()) & 
-                (df['summary'].str.strip() != '')
-            ].copy()
-            
-            return valid_df
-    except Exception as e:
-        st.error(f"Error loading data: {e}")
-        return None
-
-# Initialize session state variables
-if 'messages' not in st.session_state:
-    st.session_state.messages = []
-
-if 'api_key' not in st.session_state:
-    st.session_state.api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-
-if 'client' not in st.session_state:
-    st.session_state.client = None
-
-if 'df' not in st.session_state:
-    st.session_state.df = None
-
-if 'conversation_history' not in st.session_state:
-    st.session_state.conversation_history = ""
-
-if 'samples_generated' not in st.session_state:
-    st.session_state.samples_generated = False
-
-if 'debug_info' not in st.session_state:
-    st.session_state.debug_info = ""
-
-# Function to display chat message
-def display_message(role, content, avatar=None):
-    col1, col2 = st.columns([1, 9])
-    
-    with col1:
-        if avatar:
-            st.image(avatar, width=50)
-        elif role == "user":
-            st.markdown("👤")
-        else:
-            st.markdown("🤖")
-    
-    with col2:
-        st.markdown(f"**{role.title()}**: {content}")
-    
-    st.markdown("---")
-
-# Sidebar
-with st.sidebar:
+# Main app function
+def main():
+    # Title and introduction
     st.title("Community Notes Assistant")
-    st.markdown("This app helps provide context for potentially misleading content using Claude API.")
+    st.markdown("""
+    This app helps expand the reach of Community Notes by providing helpful context to posts that might be 
+    misleading or missing important information. It uses Claude AI to generate informative responses.
+    """)
+    
+    # Sidebar for settings
+    st.sidebar.title("Settings")
+    
+    # API Key input
+    api_key = st.sidebar.text_input("Anthropic API Key", type="password")
+    if not api_key:
+        st.sidebar.warning("Please enter your Anthropic API Key to use the app")
+    
+    # Number of context examples to load
+    num_context_examples = st.sidebar.slider("Number of random examples", min_value=0, max_value=100, value=5)
     
     # Data source settings
-    st.subheader("Data Settings")
-    data_url = st.text_input(
+    st.sidebar.header("Data Source")
+    data_url = st.sidebar.text_input(
         "CSV Data URL", 
-        "https://f004.backblazeb2.com/file/aaronbergman-public/tweet_data_final_v1_filtered_2cols.csv",
-        help="URL to the CSV file containing tweet content and summaries"
+        value="https://f004.backblazeb2.com/file/aaronbergman-public/tweet_data_final_v1_filtered_2cols.csv"
     )
     
-    sample_count = st.number_input("Number of samples", min_value=1, max_value=100, value=10,
-                                  help="Number of random samples to select from the dataset. These will be shown as examples and included in conversation history.")
+    # Button to load/reload data
+    load_data = st.sidebar.button("Load/Reload Data")
     
-    if st.button("Load Data & Generate Samples"):
-        # Load the data
-        st.session_state.df = load_data(data_url)
-        if st.session_state.df is not None:
-            # Select random rows
-            valid_df = st.session_state.df
-            n = min(sample_count, len(valid_df))
-            
-            if len(valid_df) < n:
-                st.warning(f"Only found {len(valid_df)} valid rows")
-                n = len(valid_df)
-            
-            random_indices = random.sample(range(len(valid_df)), n)
-            selected_rows = valid_df.iloc[random_indices]
-            
-            # Clear previous samples
-            st.session_state.conversation_history = ""
-            
-            # Build conversation history
-            for _, row in selected_rows.iterrows():
-                tweet = row['tweet_content'].strip()
-                summary = row['summary'].strip()
-                
-                # Skip if either part is empty after stripping
-                if not tweet or not summary:
-                    continue
-                
-                # Add to conversation history
-                st.session_state.conversation_history += f"User: {tweet}\nAssistant: {summary}\n{'-' * 80}\n"
-            
-            st.success(f"Loaded {len(valid_df)} valid rows and generated {n} random samples")
-            st.session_state.samples_generated = True
-        else:
-            st.error("Failed to load data")
+    # Initialize session state for conversation history and chat
+    if 'conversation_history' not in st.session_state:
+        st.session_state.conversation_history = ""
     
-    # API settings
-    st.subheader("API Settings")
-    api_key_input = st.text_input("Anthropic API Key", value=st.session_state.api_key, type="password", 
-                                help="Your Anthropic API key for Claude. Will be stored in session state only.")
+    if 'chat_history' not in st.session_state:
+        st.session_state.chat_history = []
     
-    if api_key_input:
-        st.session_state.api_key = api_key_input
+    # Initialize the DataFrame in session state
+    if 'df' not in st.session_state or load_data:
         try:
-            st.session_state.client = anthropic.Anthropic(api_key=api_key_input)
-            st.success("API Key set successfully")
+            with st.spinner("Downloading and loading data..."):
+                # Download and load the CSV file from URL
+                response = requests.get(data_url)
+                response.raise_for_status()  # Raise an exception for bad status codes
+                
+                # Load the CSV data from the response content
+                csv_data = StringIO(response.text)
+                df = pd.read_csv(csv_data, sep=None, engine='python')
+                
+                # Check if the column names match expected names
+                if 'tweet_content' not in df.columns or 'summary' not in df.columns:
+                    # Try to adapt to the actual column names if they exist but are named differently
+                    if len(df.columns) >= 2:
+                        df.columns = ['tweet_content', 'summary']
+                        st.success(f"Renamed columns to 'tweet_content' and 'summary'")
+                    else:
+                        st.error(f"Error: Expected 'tweet_content' and 'summary' columns but found: {df.columns.tolist()}")
+                        return
+                
+                # Filter out rows with empty or problematic content
+                valid_df = df[
+                    (df['tweet_content'].notna()) & 
+                    (df['tweet_content'].str.strip() != '') &
+                    (df['summary'].notna()) & 
+                    (df['summary'].str.strip() != '')
+                ].copy()
+                
+                st.session_state.df = valid_df
+                st.success(f"Successfully loaded {len(valid_df)} valid rows from data")
+                
         except Exception as e:
-            st.error(f"Error setting API key: {e}")
+            st.error(f"Error loading data: {str(e)}")
+            st.session_state.df = None
     
-    # Debug mode toggle
-    show_debug = st.checkbox("Show Debug Info", value=False)
+    # Load context examples if requested and data is available
+    if st.session_state.df is not None and num_context_examples > 0:
+        if st.sidebar.button("Generate New Context Examples"):
+            with st.spinner(f"Selecting {num_context_examples} random examples..."):
+                # Select random rows for context
+                n = min(num_context_examples, len(st.session_state.df))
+                random_indices = random.sample(range(len(st.session_state.df)), n)
+                selected_rows = st.session_state.df.iloc[random_indices]
+                
+                # Generate conversation history from selected rows
+                conversation_history = ""
+                for _, row in selected_rows.iterrows():
+                    tweet = row['tweet_content'].strip()
+                    summary = row['summary'].strip()
+                    
+                    # Skip if either part is empty after stripping
+                    if not tweet or not summary:
+                        continue
+                        
+                    conversation_history += f"User: {tweet}\nAssistant: {summary}\n{'-' * 80}\n"
+                
+                st.session_state.conversation_history = conversation_history
+                st.success(f"Generated {n} new context examples")
     
-    # About section
-    st.subheader("About")
-    st.markdown("""
-    This application demonstrates using Claude API to analyze content and provide Community Notes-style context.
+    # Display the context examples in a collapsible section
+    if st.session_state.conversation_history:
+        with st.expander("View Context Examples"):
+            st.text(st.session_state.conversation_history)
     
-    Created with Streamlit using the Anthropic API.
-    """)
-
-# Main content area
-st.title("Community Notes Assistant")
-
-# Tabs for different functionality
-tab1, tab2, tab3 = st.tabs(["Interactive Chat", "Sample Notes", "Conversation History"])
-
-# Tab 1: Interactive Chat
-with tab1:
-    st.header("Chat with the Community Notes Assistant")
-    st.markdown("""
-    Type a tweet or post to get a Community Notes-style response from Claude. 
-    The assistant will provide helpful context for potentially misleading content, 
-    or reply with "NNN" (No Note Needed) if additional context isn't necessary.
-    """)
+    # Main chat interface
+    st.header("Chat Interface")
     
-    # Display debug info if enabled
-    if show_debug and st.session_state.debug_info:
-        st.info(f"Debug: {st.session_state.debug_info}")
-    
-    # Display previous messages
-    for message in st.session_state.messages:
-        display_message(message["role"], message["content"])
+    # Display chat history
+    chat_container = st.container()
+    with chat_container:
+        for i, (user_msg, ai_msg) in enumerate(st.session_state.chat_history):
+            st.markdown(f"**User:**\n{user_msg}")
+            st.markdown(f"**Assistant:**\n{ai_msg}")
+            st.markdown("---")
     
     # User input
-    with st.form(key="chat_form", clear_on_submit=True):
-        user_input = st.text_area("Type your message:", height=100, 
-                                 placeholder="Enter a tweet or post to analyze...")
-        submit_button = st.form_submit_button("Send")
+    user_input = st.text_area("Enter your post or tweet:", height=100)
+    col1, col2 = st.columns([1, 5])
+    with col1:
+        send_button = st.button("Submit")
+    with col2:
+        if st.button("Clear Chat"):
+            st.session_state.chat_history = []
+            st.experimental_rerun()
     
-    # Process user input and get response
-    if submit_button and user_input:
-        # Add user message to chat history
-        st.session_state.messages.append({"role": "user", "content": user_input})
-        display_message("user", user_input)
-        
-        # Get response from Claude if API key is set
-        if st.session_state.client:
-            with st.spinner("Getting response from Claude..."):
-                response = call_claude_api(st.session_state.client, user_input, st.session_state.conversation_history)
-                st.session_state.messages.append({"role": "assistant", "content": response})
-                display_message("assistant", response)
-        else:
-            st.warning("Please set your Anthropic API key in the sidebar to get responses")
+    if send_button and user_input and api_key:
+        try:
+            # Initialize the Anthropic client
+            client = anthropic.Anthropic(api_key=api_key)
+            
+            # Get AI response using the conversation history
+            with st.spinner("Generating response..."):
+                ai_response = call_claude_api(client, user_input, st.session_state.conversation_history)
+            
+            # Add the exchange to chat history
+            st.session_state.chat_history.append((user_input, ai_response))
+            
+            # Clear the input area and rerun to update the UI
+            st.experimental_rerun()
+            
+        except Exception as e:
+            st.error(f"Error: {str(e)}")
     
-    # Add a button to clear the chat
-    if st.button("Clear Chat History"):
-        st.session_state.messages = []
-        st.experimental_rerun()
+    # Warning if API key is missing
+    if send_button and not api_key:
+        st.warning("Please enter your Anthropic API key in the sidebar to use the chat functionality.")
 
-# Tab 2: Sample Notes
-with tab2:
-    st.header("Sample Community Notes")
-    
-    if st.session_state.samples_generated and st.session_state.df is not None:
-        # Display the sample conversations that were generated
-        conversation_lines = st.session_state.conversation_history.strip().split('\n')
-        i = 0
-        current_user = ""
-        current_assistant = ""
-        
-        for line in conversation_lines:
-            if line.startswith("User: "):
-                if current_user and current_assistant:  # If we have a complete exchange
-                    st.markdown(f"### Sample {i+1}")
-                    display_message("user", current_user)
-                    display_message("assistant", current_assistant)
-                    i += 1
-                current_user = line[6:]  # Remove "User: " prefix
-                current_assistant = ""
-            elif line.startswith("Assistant: "):
-                current_assistant = line[11:]  # Remove "Assistant: " prefix
-            elif line.startswith("-" * 80) and current_user and current_assistant:
-                st.markdown(f"### Sample {i+1}")
-                display_message("user", current_user)
-                display_message("assistant", current_assistant)
-                i += 1
-                current_user = ""
-                current_assistant = ""
-        
-        # Display the last one if needed
-        if current_user and current_assistant:
-            st.markdown(f"### Sample {i+1}")
-            display_message("user", current_user)
-            display_message("assistant", current_assistant)
-    else:
-        st.info("Click 'Load Data & Generate Samples' in the sidebar to view random samples")
-
-# Tab 3: Raw Conversation History
-with tab3:
-    st.header("Raw Conversation History")
-    
-    if st.session_state.conversation_history:
-        st.text_area("Conversation History (used for context)", st.session_state.conversation_history, 
-                    height=400, disabled=True)
-    else:
-        st.info("No conversation history generated yet. Click 'Load Data & Generate Samples' in the sidebar.")
-
-# Footer
-st.markdown("---")
-st.markdown("Made with ❤️ using Streamlit and Claude | © 2025")
+if __name__ == "__main__":
+    main()
