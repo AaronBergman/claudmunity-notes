@@ -223,7 +223,7 @@ with st.sidebar:
     if api_key_input:
         st.session_state.api_key = api_key_input
         try:
-            st.session_state.client = anthropic.Anthropic(api_key=st.session_state.api_key)
+            st.session_state.client = anthropic.Anthropic(api_key=api_key_input)
             st.success("API Key set successfully")
         except Exception as e:
             st.error(f"Error setting API key: {e}")
