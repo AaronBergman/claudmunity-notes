@@ -210,7 +210,7 @@ def main():
     with col2:
         if st.button("Clear Chat"):
             st.session_state.chat_history = []
-            st.experimental_rerun()
+            st.rerun()
     
     if send_button and user_input and api_key:
         try:
@@ -225,7 +225,7 @@ def main():
             st.session_state.chat_history.append((user_input, ai_response))
             
             # Clear the input area and rerun to update the UI
-            st.experimental_rerun()
+            st.rerun()
             
         except Exception as e:
             st.error(f"Error: {str(e)}")
